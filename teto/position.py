@@ -6,6 +6,8 @@
 from __future__ import annotations
 from typing import Literal
 
+from teto.result import SolvedTradingResult
+
 
 class Position:
     """
@@ -128,11 +130,3 @@ class PositionBucket:
             self.pos_long = Position(size=0, price=0, side='long')
 
             return result
-
-
-class SolvedTradingResult:
-    def __init__(self, size: float, long_price: float, short_price: float, pnl: float) -> None:
-        self.size = size
-        self.long_price = long_price
-        self.short_price = short_price
-        self.pnl = pnl
