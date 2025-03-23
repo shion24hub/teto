@@ -33,17 +33,23 @@ from typing import Literal
 
 
 class MarketOrder:
-    def __init__(self, size: float, price: float, side: Literal['long', 'short'], tp_price: float | None = None, sl_price: float | None = None) -> None:
+    def __init__(self, size: float, price: float, side: Literal['long', 'short'], tp_price: float | None = None, sl_price: float | None = None, clock=0) -> None:
         self.size = size
         self.price = price
         self.side = side
         self.tp_price = tp_price
         self.sl_price = sl_price
+        self.clock = clock
 
-        self.id = uuid.uuid4()
-        self.clock = 0
+        self.identifier = uuid.uuid4()
 
-    def check_contract(self) -> bool:
+    def __repr__(self):
+        return f'MarketOrder(size={self.size}, price={self.price}, side={self.side}, tp_price={self.tp_price}, sl_price={self.sl_price}, clock={self.clock})'
+    
+    def __str__(self):
+        return f'MarketOrder(size={self.size}, price={self.price}, side={self.side}, tp_price={self.tp_price}, sl_price={self.sl_price}, clock={self.clock})'
+
+    def check_contract(self, high_price: float, low_price: float) -> bool:
         return True
 
     def generate_position(self) -> Position:
@@ -75,15 +81,15 @@ class MarketOrder:
 
 
 class LimitOrder:
-    def __init__(self, size: float, price: float, side: Literal['long' , 'short'], tp_price: float | None = None, sl_price: float | None = None) -> None:
+    def __init__(self, size: float, price: float, side: Literal['long' , 'short'], tp_price: float | None = None, sl_price: float | None = None, clock=0) -> None:
         self.size = size
         self.price = price
         self.side = side
         self.tp_price = tp_price
         self.sl_price = sl_price
+        self.clock = clock
 
-        self.id = uuid.uuid4()
-        self.clock = 0
+        self.identifier = uuid.uuid4()
     
     def check_contract(self, high_price: float, low_price: float) -> bool:
         
@@ -121,15 +127,15 @@ class LimitOrder:
 
 
 class StopOrder:
-    def __init__(self, size: float, price: float, side: Literal['long', 'short'], tp_price: float | None = None, sl_price: float | None = None) -> None:
+    def __init__(self, size: float, price: float, side: Literal['long', 'short'], tp_price: float | None = None, sl_price: float | None = None, clock=0) -> None:
         self.size = size
         self.price = price
         self.side = side
         self.tp_price = tp_price
         self.sl_price = sl_price
+        self.clock = clock
 
-        self.id = uuid.uuid4()
-        self.clock = 0
+        self.identifier = uuid.uuid4()
 
     def check_triggering(self, high_price: float, low_price: float) -> bool:
         if self.side == 'long' and self.price >= high_price:
@@ -145,9 +151,9 @@ class StopOrder:
             price=self.price,
             side=self.side,
             tp_price=self.tp_price,
-            sl_price=self.sl_price
+            sl_price=self.sl_price,
+            clock=self.clock
         )
-        # 本来、クロックは入れたほうがいいが、今回は省略。処理場は問題ない。
     
     def generate_tp_order(self) -> LimitOrder:
         side = 'short' if self.side == 'long' else 'long'
@@ -171,16 +177,12 @@ class StopOrder:
 class OrderBucket:
     def __init__(self, order: MarketOrder | LimitOrder | StopOrder | None = None) -> None:
         
-        self.orders: list[tuple[int, MarketOrder | LimitOrder | StopOrder]] = []
+        self.order_dict: dict[uuid.UUID, MarketOrder | LimitOrder | StopOrder] = {}
         if order is not None:
-            self.orders.append((0, order))
-
-        # ↓ idはオーダーごとにuuidで振ることにしたので、不要になりました。
-        # self.next_id = len(self.orders) # OrderのIDは0から始める。
+            self.add(order) # self.order_dict[order.identifier] = order
             
     def add(self, order: MarketOrder | LimitOrder | StopOrder) -> None:
-        self.orders.append((self.next_id, order))
-        self.next_id += 1
+        self.order_dict[order.identifier] = order
 
     def solve(self, high_price: float, low_price: float) -> list[Position]:
         """
@@ -189,58 +191,63 @@ class OrderBucket:
 
         # 分離: クロックにより、処理するオーダーと処理しないオーダーに分離。
         # -> 処理しないオーダーは、次の処理に回す。
-        processing_orders: list[tuple[int, MarketOrder | LimitOrder | StopOrder]] = []
-        unprocessing_orders: list[tuple[int, MarketOrder | LimitOrder | StopOrder]] = []
-        for o in self.orders:
-            if o[1].clock > 0:
-                processing_orders.append(o)
-            else:
-                unprocessing_orders.append(o)
+        processing_order_ids: list[uuid.UUID] = [k for k, v in self.order_dict.items() if v.clock > 0]
+        unprocessing_order_ids: list[uuid.UUID] = [k for k, v in self.order_dict.items() if v.clock == 0]
         
         # 分離: StopOrderをMarketOrderに変換するため、StopOrderを分離したリストを作成。
-        processing_orders_except_stop: list[tuple[int, MarketOrder | LimitOrder]] = []
-        processing_stop_orders: list[tuple[int, StopOrder]] = []
-        for o in processing_orders:
-            if isinstance(o[1], StopOrder):
-                processing_stop_orders.append(o)
-            else:
-                processing_orders_except_stop.append(o)
+        for k in processing_order_ids:
+            if not isinstance(self.order_dict[k], StopOrder):
+                continue
 
-        # StopOrderの変換処理: StopOrderは、トリガーされたらMarketOrderに変換される。
-        for o in processing_stop_orders:
-            if o[1].check_triggering(high_price, low_price):
-                mo = o[1].generate_market_order()
-                processing_orders_except_stop.append((o[0], mo)) # IDは変更なし。
+            if self.order_dict[k].check_triggering(high_price, low_price):
+                mo = self.order_dict[k].generate_market_order()
+                self.order_dict[k] = mo # IDは変更なしで、オーダーだけ変更する。
         
         # 約定判定処理
         # -> 約定したオーダーは、ポジションに変換し、リストに追加。
         # -> 未約定のオーダーは、次の処理に回す。
-        contracted_orders: list[tuple[int, MarketOrder | LimitOrder]] = []
-        uncontracted_orders: list[tuple[MarketOrder | LimitOrder]] = []
-        for o in processing_orders_except_stop:
-            if o[1].check_contract(high_price, low_price):
-                contracted_orders.append(o)
+        contracted_order_ids: list[uuid.UUID] = []
+        uncontracted_order_ids: list[uuid.UUID] = []
+        for k in processing_order_ids:
+            if isinstance(self.order_dict[k], StopOrder):
+                uncontracted_order_ids.append(k)
+                continue
+
+            if self.order_dict[k].check_contract(high_price, low_price):
+                contracted_order_ids.append(k)
             else:
-                uncontracted_orders.append(o)
+                uncontracted_order_ids.append(k)
         
+        # 約定したオーダーをポジションに変換してリストに追加。
+        positions: list[Position] = []
+        for k in contracted_order_ids:
+            positions.append(self.order_dict[k].generate_position())
+  
         # TP/SLオーダーの生成
         # -> 約定したオーダーの中に、TP/SLオーダーが設定されていたら、それを生成。
-        # -> TP/SLオーダーには新しいidを振るので、最後に追加する。
-        tp_sl_orders_without_id: list[MarketOrder | LimitOrder] = []
-        for o in contracted_orders:
-            if o[1].tp_price is not None:
-                tp_order = o[1].generate_tp_order()
-                tp_sl_orders_without_id.append(tp_order)
-            
-            if o[1].sl_price is not None:
-                sl_order = o[1].generate_sl_order()
-                tp_sl_orders_without_id.append(sl_order)
+        tp_sl_order_ids: list[uuid.UUID] = []
+        for k in contracted_order_ids:
+            if self.order_dict[k].tp_price is not None:
+                tp_order = self.order_dict[k].generate_tp_order()
+                tp_sl_order_ids.append(tp_order.identifier)
+                self.order_dict[tp_order.identifier] = tp_order
         
-        # 次のオーダーをセット（未約定のもの）。
+            if self.order_dict[k].sl_price is not None:
+                sl_order = self.order_dict[k].generate_sl_order()
+                tp_sl_order_ids.append(sl_order.identifier)
+                self.order_dict[sl_order.identifier] = sl_order
+        
+        # 次のオーダーをセット。
+        # -> 未処理（clock==0）のオーダーと、未約定のオーダーと、TP/SLオーダーを、次の処理に渡す。
+        next_order_ids = unprocessing_order_ids + uncontracted_order_ids + tp_sl_order_ids
+        self.order_dict = {k: v for k, v in self.order_dict.items() if k in next_order_ids}
 
-        # 未処理リストに未約定リストをエクステンドしたのち、クロックを進め、次に回す。
+        # クロックを進める。
+        for k in self.order_dict.keys():
+            self.order_dict[k].clock += 1
+        
+        return positions
 
-        return [o[1].generate_position() for o in contracted_orders]
 
 
 # --- ポジション関係は完成 ---
@@ -250,6 +257,12 @@ class Position:
         self.size = size
         self.price = price
         self.side = side
+
+    def __repr__(self):
+        return f'Position(size={self.size}, price={self.price}, side={self.side})'
+    
+    def __str__(self):
+        return f'Position(size={self.size}, price={self.price}, side={self.side})'
     
     def add(self, other: Position) -> Position:
         if self.side == other.side:
@@ -347,20 +360,33 @@ class SolvedTradingResult:
 
 # 簡易的なテスト
 def test1():
-    pos1 = Position(size=1, price=10000, side='long')
-    pos2 = Position(size=1, price=12000, side='short')
+    # pos1 = Position(size=1, price=10000, side='long')
+    # pos2 = Position(size=1, price=12000, side='short')
 
-    bucket = PositionBucket()
-    bucket.add(pos1)
-    bucket.add(pos2)
+    # bucket = PositionBucket()
+    # bucket.add(pos1)
+    # bucket.add(pos2)
+
+    # result = bucket.solve()
+    # print(result.pnl)
+    # print(result.size)
+    # print(result.long_price)
+    # print(result.short_price)
 
 
+    order_bucket = OrderBucket()
+    order_bucket.add(MarketOrder(size=1, price=10000, side='long'))
 
-    result = bucket.solve()
-    print(result.pnl)
-    print(result.size)
-    print(result.long_price)
-    print(result.short_price)
+    print('solve(1)')
+    ret1 = order_bucket.solve(1000, 1000)
+    print(ret1)
+    print(order_bucket.order_dict)
+
+    print('solve(2)')
+    ret2 = order_bucket.solve(1000, 1000)
+    print(ret2)
+    print(order_bucket.order_dict)
+
 
 
 if __name__ == '__main__':
