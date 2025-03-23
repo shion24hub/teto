@@ -1,12 +1,75 @@
+"""
+オーダーを管理するクラス。
+"""
+
 from __future__ import annotations
+from abc import ABCMeta, abstractmethod
 from typing import Literal
 import uuid
 
-from position import Position
+from teto.position import Position
 
 
-class MarketOrder:
+class BaseOrder(metaclass=ABCMeta):
+    """
+    BaseOrder.
+    1. オーダー処理の対象になるクラス。MarketOrderとLimitOrderが継承する。
+    2. GenerativeOrderが発火条件を満たした場合に生成されるクラス。
+    """
+    @abstractmethod
+    def check_contract(self, high_price: float, low_price: float) -> bool:
+        """
+        Return True if the order is contracted.
+        """
+        pass
+    
+    @abstractmethod
+    def generate_position(self) -> Position:
+        """
+        Return the position object.
+        """
+        pass
+    
+    @abstractmethod
+    def generate_tp_order(self) -> BaseOrder:
+        """
+        Return the take profit order object(LimitOrder)
+        """
+        pass
+    
+    @abstractmethod
+    def generate_sl_order(self) -> BaseOrder:
+        """
+        Return the stop loss order object(StopOrder)
+        """
+        pass
+
+
+class GenerativeOrder(metaclass=ABCMeta):
+    """
+    GenerativeOrder.
+    BaseOrderを生成するオーダーのクラス。StopOrderが継承する。
+    """
+    @abstractmethod
+    def check_triggering(self, high_price: float, low_price: float) -> bool:
+        """
+        Return True if the order is triggered.
+        """
+        pass
+    
+    @abstractmethod
+    def generate_base_order(self) -> BaseOrder:
+        """
+        Return the market order object(MarketOrder)
+        """
+        pass
+
+
+class MarketOrder(BaseOrder):
     def __init__(self, size: float, price: float, side: Literal['long', 'short'], tp_price: float | None = None, sl_price: float | None = None, clock=0) -> None:
+        """
+        <-- INDEX: TEST --> passed.
+        """
         self.size = size
         self.price = price
         self.side = side
@@ -21,8 +84,15 @@ class MarketOrder:
     
     def __str__(self):
         return f'MarketOrder(size={self.size}, price={self.price}, side={self.side}, tp_price={self.tp_price}, sl_price={self.sl_price}, clock={self.clock})'
+    
+    def __eq__(self, other: MarketOrder) -> bool:
+        return self.identifier == other.identifier
 
     def check_contract(self, high_price: float, low_price: float) -> bool:
+        """
+        <-- INDEX: TEST --> passed.
+        """
+        # MarketOrderは即時約定する。
         return True
 
     def generate_position(self) -> Position:
@@ -53,8 +123,11 @@ class MarketOrder:
     # 関係し合っている2つのオーダーがあって、どちらかが約定したらもう片方をキャンセルといったような処理ができるようにする。
 
 
-class LimitOrder:
+class LimitOrder(BaseOrder):
     def __init__(self, size: float, price: float, side: Literal['long' , 'short'], tp_price: float | None = None, sl_price: float | None = None, clock=0) -> None:
+        """
+        <-- INDEX: TEST --> passed.
+        """
         self.size = size
         self.price = price
         self.side = side
@@ -64,11 +137,16 @@ class LimitOrder:
 
         self.identifier = uuid.uuid4()
     
+    def __eq__(self, other: LimitOrder) -> bool:
+        return self.identifier == other.identifier
+    
     def check_contract(self, high_price: float, low_price: float) -> bool:
-        
-        if self.side == 'long' and self.price <= low_price:
+        """
+        <-- INDEX: TEST --> passed.
+        """
+        if self.side == 'long' and low_price <= self.price:
             return True
-        elif self.side == 'short' and self.price >= high_price:
+        elif self.side == 'short' and self.price <= high_price:
             return True
         else:
             return False
@@ -99,8 +177,11 @@ class LimitOrder:
         )
 
 
-class StopOrder:
+class StopOrder(GenerativeOrder):
     def __init__(self, size: float, price: float, side: Literal['long', 'short'], tp_price: float | None = None, sl_price: float | None = None, clock=0) -> None:
+        """
+        <-- INDEX: TEST --> passed.
+        """
         self.size = size
         self.price = price
         self.side = side
@@ -109,16 +190,22 @@ class StopOrder:
         self.clock = clock
 
         self.identifier = uuid.uuid4()
+    
+    def __eq__(self, other: StopOrder) -> bool:
+        return self.identifier == other.identifier
 
     def check_triggering(self, high_price: float, low_price: float) -> bool:
-        if self.side == 'long' and self.price >= high_price:
+        """
+        <-- INDEX: TEST --> passed.
+        """
+        if self.side == 'long' and high_price >= self.price:
             return True
-        elif self.side == 'short' and self.price <= low_price:
+        elif self.side == 'short' and low_price <= self.price:
             return True
         else:
             return False
     
-    def generate_market_order(self) -> MarketOrder:
+    def generate_base_order(self) -> MarketOrder:
         return MarketOrder(
             size=self.size,
             price=self.price,
@@ -127,96 +214,112 @@ class StopOrder:
             sl_price=self.sl_price,
             clock=self.clock
         )
-    
-    def generate_tp_order(self) -> LimitOrder:
-        side = 'short' if self.side == 'long' else 'long'
-
-        return LimitOrder(
-            size=self.size,
-            price=self.tp_price,
-            side=side
-        )
-    
-    def generate_sl_order(self) -> StopOrder:
-        side = 'short' if self.side == 'long' else 'long'
-
-        return StopOrder(
-            size=self.size,
-            price=self.sl_price,
-            side=side
-        )
 
 
 class OrderBucket:
-    def __init__(self, order: MarketOrder | LimitOrder | StopOrder | None = None) -> None:
-        
-        self.order_dict: dict[uuid.UUID, MarketOrder | LimitOrder | StopOrder] = {}
+    def __init__(self, order: BaseOrder | GenerativeOrder | None = None) -> None:
+
+        self.base_order_dict: dict[uuid.UUID, BaseOrder] = {}
+        self.generative_order_dict: dict[uuid.UUID, GenerativeOrder] = {}
         if order is not None:
-            self.add(order) # self.order_dict[order.identifier] = order
+            self.add(order)
             
-    def add(self, order: MarketOrder | LimitOrder | StopOrder) -> None:
-        self.order_dict[order.identifier] = order
+    def add(self, order: BaseOrder | GenerativeOrder) -> None:
+        """
+        BaseOrderとGenerativeOrderを区別して、それぞれの辞書に追加する。
+        <-- INDEX: TEST --> passed.
+        """
+
+        if isinstance(order, BaseOrder):
+            self.base_order_dict[order.identifier] = order
+        elif isinstance(order, GenerativeOrder):
+            self.generative_order_dict[order.identifier] = order
+        else:
+            raise ValueError('order must be BaseOrder or GenerativeOrder.')
+    
+    def _process_generative_order_triggering(self, ids: list[uuid.UUID], high_price: float, low_price: float) -> None:
+        """
+        GenerativeOrderの発火イベントの検知。
+        -> 発火したGenerativeOrderをBaseOrderに変換して、BaseOrderの辞書に追加。
+        -> GenerativeOrderは削除。
+
+        <-- INDEX: TEST --> passed.
+        """
+
+        for k in ids:
+            if self.generative_order_dict[k].check_triggering(high_price, low_price):
+                mo = self.generative_order_dict[k].generate_base_order()
+                self.base_order_dict[mo.identifier] = mo
+                del self.generative_order_dict[k]
+
+    def _process_base_order_contract(self, ids: list[uuid.UUID], high_price: float, low_price: float) -> list[uuid.UUID]:
+        """
+        BaseOrderの約定判定処理。
+        -> 約定したオーダーのIDを返す。
+        """
+
+        contracted_order_ids: list[uuid.UUID] = []
+        for k in ids:
+            if self.base_order_dict[k].check_contract(high_price, low_price):
+                contracted_order_ids.append(k)
+        
+        return contracted_order_ids
+    
+    def _process_tp_sl_order(self, ids: list[uuid.UUID]) -> None:
+        """
+        約定したBaseOrderに設定されているTP/SLオーダーを生成。
+        -> self.base_order_dict及びself.generative_order_dictに追加。
+
+        <-- INDEX: TEST --> passed.
+        """
+
+        for k in ids:
+            if self.base_order_dict[k].tp_price is not None:
+                tp_order = self.base_order_dict[k].generate_tp_order()
+
+                # TPオーダーはLimitOrderなので、self.base_order_dictに追加。
+                self.base_order_dict[tp_order.identifier] = tp_order
+        
+            if self.base_order_dict[k].sl_price is not None:
+                sl_order = self.base_order_dict[k].generate_sl_order()
+
+                # SLオーダーはStopOrderなので、self.generative_order_dictに追加。
+                self.generative_order_dict[sl_order.identifier] = sl_order
 
     def solve(self, high_price: float, low_price: float) -> list[Position]:
         """
         Return the list of executed orders.
         """
+        # GenerativeOrderの発火イベントの検知と変換処理。
+        # -> 1. 発火したGenerativeOrderをBaseOrderに変換して、self.base_order_dictに追加。
+        # -> 2. 発火したGenerativeOrderは、self.generative_order_dictから削除。
+        ids_generative_order_to_process: list[uuid.UUID] = [k for k, v in self.generative_order_dict.items() if v.clock > 0]
+        self._process_generative_order_triggering(ids_generative_order_to_process, high_price, low_price)
 
-        # 分離: クロックにより、処理するオーダーと処理しないオーダーに分離。
-        # -> 処理しないオーダーは、次の処理に回す。
-        processing_order_ids: list[uuid.UUID] = [k for k, v in self.order_dict.items() if v.clock > 0]
-        unprocessing_order_ids: list[uuid.UUID] = [k for k, v in self.order_dict.items() if v.clock == 0]
+        # BaseOrderの内、処理するもの(clock>0)を取得。
+        ids_base_order_to_process: list[uuid.UUID] = [k for k, v in self.base_order_dict.items() if v.clock > 0]
         
-        # 分離: StopOrderをMarketOrderに変換するため、StopOrderを分離したリストを作成。
-        for k in processing_order_ids:
-            if not isinstance(self.order_dict[k], StopOrder):
-                continue
+        # BaseOrderの約定判定処理
+        contracted_order_ids = self._process_base_order_contract(ids_base_order_to_process, high_price, low_price)
 
-            if self.order_dict[k].check_triggering(high_price, low_price):
-                mo = self.order_dict[k].generate_market_order()
-                self.order_dict[k] = mo # IDは変更なしで、オーダーだけ変更する。
-        
-        # 約定判定処理
-        # -> 約定したオーダーは、ポジションに変換し、リストに追加。
-        # -> 未約定のオーダーは、次の処理に回す。
-        contracted_order_ids: list[uuid.UUID] = []
-        uncontracted_order_ids: list[uuid.UUID] = []
-        for k in processing_order_ids:
-            if isinstance(self.order_dict[k], StopOrder):
-                uncontracted_order_ids.append(k)
-                continue
-
-            if self.order_dict[k].check_contract(high_price, low_price):
-                contracted_order_ids.append(k)
-            else:
-                uncontracted_order_ids.append(k)
-        
-        # 約定したオーダーをポジションに変換してリストに追加。
-        positions: list[Position] = []
+        # 約定したBaseOrderをPositionに変換して、リストに格納。
+        new_positions: list[Position] = []
         for k in contracted_order_ids:
-            positions.append(self.order_dict[k].generate_position())
-  
-        # TP/SLオーダーの生成
-        # -> 約定したオーダーの中に、TP/SLオーダーが設定されていたら、それを生成。
-        tp_sl_order_ids: list[uuid.UUID] = []
-        for k in contracted_order_ids:
-            if self.order_dict[k].tp_price is not None:
-                tp_order = self.order_dict[k].generate_tp_order()
-                tp_sl_order_ids.append(tp_order.identifier)
-                self.order_dict[tp_order.identifier] = tp_order
-        
-            if self.order_dict[k].sl_price is not None:
-                sl_order = self.order_dict[k].generate_sl_order()
-                tp_sl_order_ids.append(sl_order.identifier)
-                self.order_dict[sl_order.identifier] = sl_order
-        
-        # 次のオーダーをセット。
-        # -> 未処理（clock==0）のオーダーと、未約定のオーダーと、TP/SLオーダーを、次の処理に渡す。
-        next_order_ids = unprocessing_order_ids + uncontracted_order_ids + tp_sl_order_ids
-        self.order_dict = {k: v for k, v in self.order_dict.items() if k in next_order_ids}
+            new_positions.append(self.base_order_dict[k].generate_position())
 
-        # クロックを進める。
-        for k in self.order_dict.keys():
-            self.order_dict[k].clock += 1
-        
-        return positions
+        # 約定したBaseOrderに設定されているTP/SLオーダーの処理。
+        # -> 1. TPオーダーが生成され、self.base_order_dictに追加。
+        # -> 2. SLオーダーが生成され、self.generative_order_dictに追加。
+        self._process_tp_sl_order(contracted_order_ids)
+
+        # self.base_order_dictを更新（self.generative_order_dictは変更なし)。
+        # -> 1. 約定したBaseOrderを削除。
+        self.base_order_dict = {k: v for k, v in self.base_order_dict.items() if k not in contracted_order_ids}
+
+        # self.base_order_dictとself.generative_order_dictのclockを更新。
+        for k in self.base_order_dict.keys():
+            self.base_order_dict[k].clock += 1
+        for k in self.generative_order_dict.keys():
+            self.generative_order_dict[k].clock += 1
+
+        return new_positions
