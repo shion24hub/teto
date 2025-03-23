@@ -62,7 +62,6 @@ class PositionBucket:
     def add(self, position: Position) -> None:
         """
         ポジションの追加。
-        
         """
         
         # <-- INDEX: TEST --> passed.
@@ -78,7 +77,6 @@ class PositionBucket:
     def solve(self) -> SolvedTradingResult:
         """
         ポジションの解決と損益の計算。
-
         """
 
         # <-- INDEX: TEST --> passed.

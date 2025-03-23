@@ -265,6 +265,20 @@ class OrderBucket:
         
         return contracted_order_ids
     
+    def _convert_base_order_to_position(self, ids: list[uuid.UUID]) -> list[tuple[BaseOrder, Position]]:
+        """
+        約定したBaseOrderをPositionに変換。
+        """
+
+        new_positions: list[tuple[BaseOrder, Position]] = []
+        for k in ids:
+            order = self.base_order_dict[k]
+            new_position = order.generate_position()
+
+            new_positions.append((order, new_position))
+        
+        return new_positions
+    
     def _process_tp_sl_order(self, ids: list[uuid.UUID]) -> None:
         """
         約定したBaseOrderに設定されているTP/SLオーダーを生成。
@@ -286,7 +300,7 @@ class OrderBucket:
                 # SLオーダーはStopOrderなので、self.generative_order_dictに追加。
                 self.generative_order_dict[sl_order.identifier] = sl_order
 
-    def solve(self, high_price: float, low_price: float) -> list[Position]:
+    def solve(self, high_price: float, low_price: float) -> list[tuple[BaseOrder, Position]]:
         """
         Return the list of executed orders.
         """
@@ -303,9 +317,10 @@ class OrderBucket:
         contracted_order_ids = self._process_base_order_contract(ids_base_order_to_process, high_price, low_price)
 
         # 約定したBaseOrderをPositionに変換して、リストに格納。
-        new_positions: list[Position] = []
-        for k in contracted_order_ids:
-            new_positions.append(self.base_order_dict[k].generate_position())
+        # new_positions: list[Position] = []
+        # for k in contracted_order_ids:
+        #     new_positions.append(self.base_order_dict[k].generate_position())
+        new_positions = self._convert_base_order_to_position(contracted_order_ids)
 
         # 約定したBaseOrderに設定されているTP/SLオーダーの処理。
         # -> 1. TPオーダーが生成され、self.base_order_dictに追加。
